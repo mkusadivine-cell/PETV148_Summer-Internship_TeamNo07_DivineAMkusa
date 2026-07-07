@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LogSentinel — Anomaly Watch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="beacon" id="beacon"></span>
+    <span class="brand-name">LOG<span class="brand-accent">SENTINEL</span></span>
+    <span class="brand-sub">log anomaly watch</span>
+  </div>
+  <div class="topbar-status" id="topbarStatus">
+    <div class="status-pill"><span class="pill-label">rows</span><span class="pill-value" id="stat-rows">0</span></div>
+    <div class="status-pill"><span class="pill-label">anomalies</span><span class="pill-value" id="stat-anoms">0</span></div>
+    <div class="status-pill critical" id="stat-critical-pill"><span class="pill-label">critical</span><span class="pill-value" id="stat-critical">0</span></div>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ============ INGEST PANEL ============ -->
+  <section class="panel ingest-panel">
+    <div class="panel-head">
+      <h2>Ingest &amp; Detect</h2>
+      <p class="panel-sub">Bring in Apache, NGINX, or syslog/auth logs. Parsing and detection run entirely on this server.</p>
+    </div>
+
+    <div class="ingest-step">
+      <span class="step-num">01</span>
+      <div class="step-body">
+        <label class="step-title">Upload a log file</label>
+        <div id="dropzone" class="dropzone">
+          <input type="file" id="fileInput" accept=".log,.txt" hidden>
+          <p><strong>Drop a file</strong> or <button type="button" id="browseBtn" class="link-btn">browse</button></p>
+          <p class="dropzone-hint">.log / .txt — Apache &amp; NGINX combined format, or syslog auth logs</p>
+        </div>
+        <div class="field-row">
+          <label for="logTypeSelect">Format</label>
+          <select id="logTypeSelect">
+            <option value="auto">Auto-detect</option>
+            <option value="web">Apache / NGINX (access log)</option>
+            <option value="syslog">Syslog (auth log)</option>
+          </select>
+          <button id="uploadBtn" class="btn btn-primary" disabled>Ingest file</button>
+          <button id="loadSampleBtn" class="btn btn-ghost">Load sample data</button>
+        </div>
+        <div id="uploadStatus" class="upload-status"></div>
+      </div>
+    </div>
+
+    <div class="ingest-step">
+      <span class="step-num">02</span>
+      <div class="step-body">
+        <label class="step-title">Tune detection thresholds</label>
+        <div class="threshold-grid">
+          <div class="threshold-field">
+            <label>Brute force — failed logins</label>
+            <div class="inline-inputs">
+              <input type="number" id="cfgBruteThreshold" value="5" min="2"> per
+              <input type="text" id="cfgBruteWindow" value="5min" size="6">
+            </div>
+          </div>
+          <div class="threshold-field">
+            <label>404 flood — errors</label>
+            <div class="inline-inputs">
+              <input type="number" id="cfgErrorThreshold" value="10" min="2"> per
+              <input type="text" id="cfgErrorWindow" value="1min" size="6">
+            </div>
+          </div>
+          <div class="threshold-field">
+            <label>Request flood — total hits</label>
+            <div class="inline-inputs">
+              <input type="number" id="cfgFloodThreshold" value="100" min="10"> per
+              <input type="text" id="cfgFloodWindow" value="1min" size="6">
+            </div>
+          </div>
+          <div class="threshold-field">
+            <label>Business hours</label>
+            <div class="inline-inputs">
+              <input type="number" id="cfgHoursStart" value="8" min="0" max="23">–
+              <input type="number" id="cfgHoursEnd" value="20" min="1" max="24">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ingest-step">
+      <span class="step-num">03</span>
+      <div class="step-body">
+        <label class="step-title">Run the scan</label>
+        <button id="detectBtn" class="btn btn-accent">Run detection</button>
+        <button id="resetBtn" class="btn btn-danger-ghost">Clear all data</button>
+        <div id="detectStatus" class="upload-status"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ KPI ROW ============ -->
+  <section class="kpi-row">
+    <div class="kpi-card">
+      <span class="kpi-label">Total requests</span>
+      <span class="kpi-value" id="kpi-total">0</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">Unique IPs</span>
+      <span class="kpi-value" id="kpi-ips">0</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">4xx / 5xx responses</span>
+      <span class="kpi-value" id="kpi-errors">0</span>
+    </div>
+    <div class="kpi-card highlight">
+      <span class="kpi-label">Anomalies flagged</span>
+      <span class="kpi-value" id="kpi-anomalies">0</span>
+    </div>
+  </section>
+
+  <!-- ============ TIMESERIES ============ -->
+  <section class="panel chart-panel wide">
+    <div class="panel-head row">
+      <h2>Traffic over time</h2>
+      <select id="intervalSelect" class="mini-select">
+        <option value="1min">1 min buckets</option>
+        <option value="5min" selected>5 min buckets</option>
+        <option value="1h">1 hour buckets</option>
+      </select>
+    </div>
+    <div class="chart-wrap tall"><canvas id="timeseriesChart"></canvas></div>
+  </section>
+
+  <!-- ============ 3-COL CHART ROW ============ -->
+  <section class="chart-grid">
+    <div class="panel chart-panel">
+      <div class="panel-head"><h2>Status codes</h2></div>
+      <div class="chart-wrap"><canvas id="statusChart"></canvas></div>
+    </div>
+    <div class="panel chart-panel">
+      <div class="panel-head"><h2>Top source IPs</h2></div>
+      <div class="chart-wrap"><canvas id="topIpsChart"></canvas></div>
+    </div>
+    <div class="panel chart-panel">
+      <div class="panel-head"><h2>Anomalies by type</h2></div>
+      <div class="chart-wrap"><canvas id="anomalyTypeChart"></canvas></div>
+    </div>
+  </section>
+
+  <!-- ============ HOURLY DISTRIBUTION ============ -->
+  <section class="panel chart-panel wide">
+    <div class="panel-head"><h2>Access by hour of day</h2>
+      <p class="panel-sub">Shaded band marks business hours; bars outside it are after-hours access.</p>
+    </div>
+    <div class="chart-wrap"><canvas id="hourlyChart"></canvas></div>
+  </section>
+
+  <!-- ============ ANOMALIES TABLE ============ -->
+  <section class="panel table-panel wide">
+    <div class="panel-head row">
+      <h2>Detected anomalies</h2>
+      <div class="table-filters">
+        <select id="filterType" class="mini-select">
+          <option value="">All types</option>
+          <option value="brute_force">Brute force</option>
+          <option value="error_flood">404 flood</option>
+          <option value="http_flood">Request flood</option>
+          <option value="suspicious_ua">Suspicious user agent</option>
+          <option value="after_hours">After hours</option>
+        </select>
+        <select id="filterSeverity" class="mini-select">
+          <option value="">All severities</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table id="anomalyTable">
+        <thead>
+          <tr>
+            <th>Severity</th><th>Type</th><th>Source IP</th>
+            <th>Window</th><th>Count</th><th>Description</th>
+          </tr>
+        </thead>
+        <tbody id="anomalyTableBody">
+          <tr class="empty-row"><td colspan="6">No anomalies yet — ingest a log and run detection.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ SUSPICIOUS UA TABLE ============ -->
+  <section class="panel table-panel wide">
+    <div class="panel-head"><h2>Suspicious user agents</h2></div>
+    <div class="table-scroll">
+      <table id="uaTable">
+        <thead><tr><th>User agent</th><th>Hits</th><th>Unique IPs</th></tr></thead>
+        <tbody id="uaTableBody">
+          <tr class="empty-row"><td colspan="3">Nothing suspicious yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer class="app-footer">
+  <span>LogSentinel — Flask · pandas · regex · SQLite · Chart.js</span>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
